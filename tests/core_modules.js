@@ -982,6 +982,31 @@ process.on('exit', code => {
         process.exitCode = 1;
     }
 });
+function inspectColorCases() {
+    const { inspect, format } = require('util');
+    const colored = inspect({ n: 1, s: 'str', b: true, u: undefined, nul: null, big: 10n, d: new Date(0), fn() {},
+        arr: [1, 'a'], deep: { a: { b: { c: {} } } }, 'quoted-key': 1 }, { colors: true });
+    equal(colored.includes('n: \u001b[33m1\u001b[39m'), true, 'numbers are yellow');
+    equal(colored.includes("s: \u001b[32m'str'\u001b[39m"), true, 'strings are green');
+    equal(colored.includes('u: \u001b[90mundefined\u001b[39m'), true, 'undefined is grey');
+    equal(colored.includes('nul: \u001b[1mnull\u001b[22m'), true, 'null is bold');
+    equal(colored.includes('big: \u001b[33m10n\u001b[39m'), true, 'bigint');
+    equal(colored.includes('d: \u001b[35m1970-01-01T00:00:00.000Z\u001b[39m'), true, 'dates are magenta');
+    equal(colored.includes('fn: \u001b[36m[Function: fn]\u001b[39m'), true, 'functions are cyan');
+    equal(colored.includes('b: \u001b[36m[Object]\u001b[39m'), true, 'depth markers are cyan');
+    equal(colored.includes("\u001b[32m'quoted-key'\u001b[39m: "), true, 'quoted keys are green');
+    const cycle = { a: 1 };
+    cycle.self = cycle;
+    equal(inspect(cycle, { colors: true }).includes('\u001b[36m<ref *1>\u001b[39m'), true, 'ref markers');
+    equal(inspect('plain', { colors: true }), "\u001b[32m'plain'\u001b[39m", 'top-level string');
+    equal(inspect([1, 2], { showHidden: true }), '[ 1, 2, [length]: 2 ]', 'showHidden lists array length');
+    equal(inspect({ a: 1 }, { showHidden: true }), '{ a: 1 }', 'showHidden on a plain object');
+    equal(inspect(Object.defineProperty({}, 'h', { value: 1 }), { showHidden: true }), '{ [h]: 1 }', 'non-enumerable key');
+    equal(format('%o', [1]), '[ 1, [length]: 1 ]', '%o shows hidden properties');
+    equal(format('%O', [1]), '[ 1 ]', '%O does not');
+    equal(inspect.colors.red.join(), '31,39', 'inspect.colors');
+    equal(inspect.styles.number, 'yellow', 'inspect.styles');
+}
 function inspectOptionCases() {
     const { inspect } = require('util');
     const sample = { name: 'x'.repeat(30), list: [1, 2, 3], nested: { a: { b: { c: { d: 1 } } } }, fn() {},
@@ -1304,6 +1329,7 @@ async function main() {
     stringDecoderCases();
     utilTypesMoreCases();
     inspectOptionCases();
+    inspectColorCases();
     parseArgsCases();
     urlFileCases();
     utilTextCases();

@@ -8,7 +8,9 @@ import("./inspect_text")::{Entries, Inspector, Seen, Text, UNIT_CLOSE_BRACE, UNI
     UNIT_CLOSE_PAREN, UNIT_GREATER_THAN, UNIT_LOWER_S, UNIT_OPEN_BRACE, UNIT_OPEN_BRACKET, UNIT_OPEN_PAREN,
     UNIT_SPACE, entries_free, entries_push, push_ascii, push_empty_items, push_remaining, text_append,
     text_ascii, text_contains, text_equals, text_equals_ascii, text_free, text_indented, text_integer,
-    text_js, text_new, text_to_value, text_unit, text_units};
+    text_js, text_new, text_to_value, text_unit, text_units, STYLE_BIGINT, STYLE_BOOLEAN, STYLE_DATE, STYLE_NULL,
+    STYLE_NUMBER, STYLE_REGEXP, STYLE_SPECIAL, STYLE_STRING, STYLE_SYMBOL, STYLE_UNDEFINED, style_begin, style_end,
+    style_text};
 import("./inspect_engine")::{BUFFER_INSPECT_BYTES, DEFAULT_ARRAY_LIMIT, DEFAULT_BREAK_LENGTH,
     DEFAULT_DEPTH, COMPACT_LEGACY, COMPACT_LEVELS, DEFAULT_STRING_LIMIT, I_BIGINT_VALUE, I_BOOLEAN_VALUE, I_BUFFER_PROTOTYPE,
     I_CUSTOM_SYMBOL, I_DATE_ISO, I_DATE_TIME, I_DESCRIPTOR, I_ERROR_PROTOTYPE, I_FUNCTION_PROTOTYPE,
@@ -207,7 +209,7 @@ fun collect_keys(ins: ptr<Inspector>, value: ptr<u8>, own: ptr<u8>, index_limit:
         if (is_undefined(ins, desc) || failed(ins)) {
             continue;
         }
-        if (wr_to_boolean(ctx, get(ctx, desc, "enumerable", deref ins.ex))) {
+        if (deref ins.show_hidden || wr_to_boolean(ctx, get(ctx, desc, "enumerable", deref ins.ex))) {
             keys_push(ins, keys, key);
         }
     }
@@ -256,15 +258,23 @@ fun format_property(ins: ptr<Inspector>, holder: ptr<u8>, key: ptr<u8>, recurse:
             var has_setter: bool = !is_undefined(ins, setter);
             if (getter_is_shown(ins, has_setter)) {
                 format_getter_value(ins, holder, getter, has_setter, recurse, value_text);
-            } else if (has_setter) {
-                text_ascii(ins, value_text, "[Getter/Setter]");
             } else {
-                text_ascii(ins, value_text, "[Getter]");
+                style_begin(ins, value_text, STYLE_SPECIAL);
+                if (has_setter) {
+                    text_ascii(ins, value_text, "[Getter/Setter]");
+                } else {
+                    text_ascii(ins, value_text, "[Getter]");
+                }
+                style_end(ins, value_text, STYLE_SPECIAL);
             }
         } else if (!is_undefined(ins, setter)) {
+            style_begin(ins, value_text, STYLE_SPECIAL);
             text_ascii(ins, value_text, "[Setter]");
+            style_end(ins, value_text, STYLE_SPECIAL);
         } else {
+            style_begin(ins, value_text, STYLE_UNDEFINED);
             text_ascii(ins, value_text, "undefined");
+            style_end(ins, value_text, STYLE_UNDEFINED);
         }
     }
     wr_unprotect(ctx, desc);
@@ -731,23 +741,37 @@ pub fun format_value(ins: ptr<Inspector>, value: ptr<u8>, recurse: i64, dest: pt
         kind = wr_type(ctx, value);
     }
     if (kind == JS_UNDEFINED) {
+        style_begin(ins, dest, STYLE_UNDEFINED);
         text_ascii(ins, dest, "undefined");
+        style_end(ins, dest, STYLE_UNDEFINED);
     } else if (kind == JS_NULL) {
+        style_begin(ins, dest, STYLE_NULL);
         text_ascii(ins, dest, "null");
+        style_end(ins, dest, STYLE_NULL);
     } else if (kind == JS_BOOLEAN) {
+        style_begin(ins, dest, STYLE_BOOLEAN);
         if (wr_to_boolean(ctx, value)) {
             text_ascii(ins, dest, "true");
         } else {
             text_ascii(ins, dest, "false");
         }
+        style_end(ins, dest, STYLE_BOOLEAN);
     } else if (kind == JS_NUMBER) {
+        style_begin(ins, dest, STYLE_NUMBER);
         format_number(ins, dest, value);
+        style_end(ins, dest, STYLE_NUMBER);
     } else if (kind == JS_STRING) {
+        style_begin(ins, dest, STYLE_STRING);
         format_string(ins, dest, value);
+        style_end(ins, dest, STYLE_STRING);
     } else if (kind == JS_SYMBOL) {
+        style_begin(ins, dest, STYLE_SYMBOL);
         format_symbol(ins, dest, value);
+        style_end(ins, dest, STYLE_SYMBOL);
     } else if (kind == JS_BIGINT) {
+        style_begin(ins, dest, STYLE_BIGINT);
         format_bigint(ins, dest, value);
+        style_end(ins, dest, STYLE_BIGINT);
     } else {
         format_object(ins, value, recurse, dest);
     }
@@ -761,9 +785,11 @@ fun circular_reference(ins: ptr<Inspector>, value: ptr<u8>, dest: ptr<Text>) -> 
                 deref ins.circular = deref ins.circular + 1;
                 deref entry.reference = deref ins.circular;
             }
+            style_begin(ins, dest, STYLE_SPECIAL);
             text_ascii(ins, dest, "[Circular *");
             text_integer(ins, dest, deref entry.reference);
             text_unit(ins, dest, UNIT_CLOSE_BRACKET);
+            style_end(ins, dest, STYLE_SPECIAL);
             return true;
         }
     }
@@ -887,9 +913,11 @@ fun format_object(ins: ptr<Inspector>, value: ptr<u8>, recurse: i64, dest: ptr<T
         var time: ptr<u8> = null;
         if (wr_callable(ctx, value)) {
             function_base(ins, value, constructor, base);
+            style_text(ins, base, STYLE_SPECIAL);
             simple = empty;
         } else if (probe(ins, I_REGEXP_SOURCE, value, null) && !text_equals_ascii(to_string, "[object Object]")) {
             text_js(ins, base, call0(ins, intrinsic(ctx, I_REGEXP_STRING), value));
+            style_text(ins, base, STYLE_REGEXP);
             simple = empty || (deref ins.depth < recurse);
         } else if (probe(ins, I_DATE_TIME, value, &time)) {
             var stamp: f64 = wr_to_number(ctx, time, deref ins.ex);
@@ -898,6 +926,7 @@ fun format_object(ins: ptr<Inspector>, value: ptr<u8>, recurse: i64, dest: ptr<T
             } else {
                 text_js(ins, base, call0(ins, intrinsic(ctx, I_DATE_ISO), value));
             }
+            style_text(ins, base, STYLE_DATE);
             simple = empty;
         } else if (chain_contains(ins, value, intrinsic(ctx, I_ERROR_PROTOTYPE))) {
             format_error(ins, value, base);
@@ -977,6 +1006,12 @@ fun format_object(ins: ptr<Inspector>, value: ptr<u8>, recurse: i64, dest: ptr<T
 }
 
 fun depth_name(ins: ptr<Inspector>, named: i32, constructor: ptr<Text>, tag: ptr<Text>, dest: ptr<Text>) {
+    style_begin(ins, dest, STYLE_SPECIAL);
+    depth_name_plain(ins, named, constructor, tag, dest);
+    style_end(ins, dest, STYLE_SPECIAL);
+}
+
+fun depth_name_plain(ins: ptr<Inspector>, named: i32, constructor: ptr<Text>, tag: ptr<Text>, dest: ptr<Text>) {
     var name: ptr<Text> = text_new(ins);
     prefix(ins, name, named, constructor, tag, "Object", -1);
     if (deref name.length > 0) {
@@ -998,7 +1033,9 @@ fun format_children(ins: ptr<Inspector>, value: ptr<u8>, own: ptr<u8>, recurse: 
     var ctx: ptr<u8> = deref ins.ctx;
     if (recurse > deref ins.depth || deref ins.seen_count >= INSPECT_NESTING_LIMIT) {
         if (shape == SHAPE_ARRAY && text_equals_ascii(constructor, "Array")) {
+            style_begin(ins, dest, STYLE_SPECIAL);
             text_ascii(ins, dest, "[Array]");
+            style_end(ins, dest, STYLE_SPECIAL);
         } else {
             depth_name(ins, named, constructor, tag, dest);
         }
@@ -1064,9 +1101,11 @@ fun format_children(ins: ptr<Inspector>, value: ptr<u8>, own: ptr<u8>, recurse: 
     var reference: i64 = deref entry.reference;
     var composed_base: ptr<Text> = text_new(ins);
     if (reference > 0) {
+        style_begin(ins, composed_base, STYLE_SPECIAL);
         text_ascii(ins, composed_base, "<ref *");
         text_integer(ins, composed_base, reference);
         text_unit(ins, composed_base, UNIT_GREATER_THAN);
+        style_end(ins, composed_base, STYLE_SPECIAL);
         if (deref base.length > 0) {
             text_unit(ins, composed_base, UNIT_SPACE);
         }
@@ -1105,6 +1144,8 @@ pub fun inspector_init(ins: ptr<Inspector>, ctx: ptr<u8>, ex: ptr<ptr<u8>>) -> b
     deref ins.sorted_fn = null;
     deref ins.numeric_separator = false;
     deref ins.getters = 0;
+    deref ins.colors = false;
+    deref ins.show_hidden = false;
     deref ins.options = null;
     deref ins.seen = mem_alloc_zeroed(INSPECT_NESTING_LIMIT * (size_of<Seen>() as i64)) as ptr<Seen>;
     if (deref ins.seen == null) {
@@ -1306,6 +1347,14 @@ fun read_layout_options(ins: ptr<Inspector>, options: ptr<u8>) {
         deref ins.sorted_fn = sorted;
     } else if (!failed(ins) && wr_type(ctx, sorted) != JS_UNDEFINED && wr_to_boolean(ctx, sorted)) {
         deref ins.sorted = 1;
+    }
+    var colors: ptr<u8> = get(ctx, options, "colors", deref ins.ex);
+    if (!failed(ins) && wr_type(ctx, colors) != JS_UNDEFINED) {
+        deref ins.colors = wr_to_boolean(ctx, colors);
+    }
+    var hidden: ptr<u8> = get(ctx, options, "showHidden", deref ins.ex);
+    if (!failed(ins) && wr_type(ctx, hidden) != JS_UNDEFINED) {
+        deref ins.show_hidden = wr_to_boolean(ctx, hidden);
     }
     var separator: ptr<u8> = get(ctx, options, "numericSeparator", deref ins.ex);
     if (!failed(ins) && wr_type(ctx, separator) != JS_UNDEFINED) {

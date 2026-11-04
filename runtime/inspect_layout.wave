@@ -1,5 +1,5 @@
 // Line layout: grouping of numeric rows and single-line versus multi-line output.
-import("./inspect_text")::{Entries, Inspector, Text, UNIT_COMMA, UNIT_NEWLINE, UNIT_SPACE, entries_free,
+import("./inspect_text")::{Entries, Inspector, Text, visible_length, UNIT_COMMA, UNIT_NEWLINE, UNIT_SPACE, entries_free,
     entries_push, text_append, text_ascii, text_contains, text_new, text_spaces, text_unit};
 import("./inspect_engine")::{COMPACT_LEGACY, GROUP_COLUMN_LIMIT, GROUP_MINIMUM_ENTRIES};
 
@@ -33,7 +33,7 @@ pub fun group_elements(ins: ptr<Inspector>, output: ptr<Entries>, has_more: bool
     }
     var separator: i64 = 2;
     for (var i: i64 = 0; i < output_length; i++) {
-        var length: i64 = deref (deref output.items)[i].length;
+        var length: i64 = visible_length((deref output.items)[i]);
         total_length += length + separator;
         if (max_length < length) {
             max_length = length;
@@ -70,7 +70,7 @@ pub fun group_elements(ins: ptr<Inspector>, output: ptr<Entries>, has_more: bool
         var line_length: i64 = 0;
         var j: i64 = c;
         while (j < deref output.count) {
-            var length: i64 = deref (deref output.items)[j].length;
+            var length: i64 = visible_length((deref output.items)[j]);
             if (j < output_length && length > line_length) {
                 line_length = length;
             }
@@ -93,7 +93,7 @@ pub fun group_elements(ins: ptr<Inspector>, output: ptr<Entries>, has_more: bool
             var item: ptr<Text> = (deref output.items)[j];
             var last: bool = j == stop - 1;
             var width: i64 = widths[j - start];
-            var used: i64 = deref item.length;
+            var used: i64 = visible_length(item);
             if (!last) {
                 used += 2;
             } else if (numeric) {
@@ -129,7 +129,7 @@ pub fun below_break_length(ins: ptr<Inspector>, output: ptr<Entries>, start: i64
         return false;
     }
     for (var i: i64 = 0; i < deref output.count; i++) {
-        total += deref (deref output.items)[i].length;
+        total += visible_length((deref output.items)[i]);
         if (total > deref ins.break_length) {
             return false;
         }

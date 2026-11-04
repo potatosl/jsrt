@@ -44,7 +44,7 @@ import("./brands")::{is_data_view, is_arguments_object, is_generator_object, is_
 import("./brands")::{is_map, is_set, is_weak_map, is_weak_set, is_regexp, is_promise, is_native_error, is_number_object,
     is_string_object, is_boolean_object, is_bigint_object, is_symbol_object};
 import("./config")::{ARGUMENT_LIMIT};
-import("./util_text")::{install_util_text};
+import("./util_text")::{install_util_text, install_inspect_tables};
 import("./util_args")::{install_util_args};
 import("./format")::{format_to_value, inspect_to_value};
 import("./inspect_engine")::{set_inspect_function, inspect_intrinsic, INSPECT_CUSTOM};
@@ -496,6 +496,7 @@ pub fun install_util(ctx: ptr<u8>, ex: ptr<ptr<u8>>) -> bool {
     define(ctx, (deref host_state.exports), "inspect", (deref host_state.methods)[6], ex, false);
     define(ctx, (deref host_state.methods)[6], "custom", inspect_intrinsic(ctx, INSPECT_CUSTOM), ex, false);
     set_inspect_function(ctx, (deref host_state.methods)[6]);
+    install_inspect_tables(ctx, (deref host_state.methods)[6], ex);
     var types: ptr<u8> = plain(ctx);
     protect(ctx, types);
     define(ctx, types, "isUint8Array", (deref host_state.methods)[3], ex, true);

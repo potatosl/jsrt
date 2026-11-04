@@ -236,7 +236,11 @@ pub fun format_arguments(ins: ptr<Inspector>, count: i64, args: ptr<ptr<u8>>, de
         } else if (next == UNIT_UPPER_O) {
             inspect_argument(ins, value, DEFAULT_DEPTH, dest);
         } else if (next == UNIT_LOWER_O) {
+            // %o is inspect(value, { showHidden: true, showProxy: true, depth: 4 }).
+            var previous: bool = deref ins.show_hidden;
+            deref ins.show_hidden = true;
             inspect_argument(ins, value, OBJECT_PLACEHOLDER_DEPTH, dest);
+            deref ins.show_hidden = previous;
         } else if (next != UNIT_LOWER_C) {
             numeric_placeholder(ins, value, next, dest);
         }

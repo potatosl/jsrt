@@ -68,6 +68,8 @@ pub struct Inspector {
     numeric_separator: bool;
     // getters: 0 off, 1 all accessors, 2 getters without setters, 3 getters with setters.
     getters: i64;
+    colors: bool;
+    show_hidden: bool;
 }
 
 // UTF-16 text buffers
@@ -337,4 +339,85 @@ pub fun push_empty_items(ins: ptr<Inspector>, list: ptr<Entries>, count: i64) {
     }
     text_unit(ins, item, UNIT_GREATER_THAN);
     entries_push(ins, list, item);
+}
+
+// ANSI styles used by the colors option: indexes into the two tables below.
+pub const STYLE_NUMBER: i64 = 0;
+pub const STYLE_BIGINT: i64 = 1;
+pub const STYLE_BOOLEAN: i64 = 2;
+pub const STYLE_UNDEFINED: i64 = 3;
+pub const STYLE_NULL: i64 = 4;
+pub const STYLE_STRING: i64 = 5;
+pub const STYLE_SYMBOL: i64 = 6;
+pub const STYLE_DATE: i64 = 7;
+pub const STYLE_REGEXP: i64 = 8;
+pub const STYLE_SPECIAL: i64 = 9;
+const UNIT_ESCAPE: u16 = 27;
+
+fun style_open_code(style: i64) -> i64 {
+    var codes: array<i64, 10> = [33, 33, 33, 90, 1, 32, 32, 35, 31, 36];
+    return codes[style];
+}
+
+fun style_close_code(style: i64) -> i64 {
+    if (style == STYLE_NULL) {
+        return 22;
+    }
+    return 39;
+}
+
+fun style_sequence(ins: ptr<Inspector>, dest: ptr<Text>, code: i64) {
+    text_unit(ins, dest, UNIT_ESCAPE);
+    text_unit(ins, dest, 91);
+    text_integer(ins, dest, code);
+    text_unit(ins, dest, 109);
+}
+
+// Opens/closes a styled run when colors is on; both are no-ops otherwise.
+pub fun style_begin(ins: ptr<Inspector>, dest: ptr<Text>, style: i64) {
+    if (deref ins.colors) {
+        style_sequence(ins, dest, style_open_code(style));
+    }
+}
+
+pub fun style_end(ins: ptr<Inspector>, dest: ptr<Text>, style: i64) {
+    if (deref ins.colors) {
+        style_sequence(ins, dest, style_close_code(style));
+    }
+}
+
+// Re-wraps already produced text in a style (used for function, date and regexp bases).
+pub fun style_text(ins: ptr<Inspector>, t: ptr<Text>, style: i64) {
+    if (!deref ins.colors || t == null || deref t.length == 0) {
+        return;
+    }
+    var copy: ptr<Text> = text_new(ins);
+    text_append(ins, copy, t);
+    deref t.length = 0;
+    style_begin(ins, t, style);
+    text_append(ins, t, copy);
+    style_end(ins, t, style);
+    text_free(copy);
+}
+
+// Length without ANSI "ESC [ digits m" sequences, as Node measures colored entries.
+pub fun visible_length(t: ptr<Text>) -> i64 {
+    var total: i64 = 0;
+    var at: i64 = 0;
+    var count: i64 = deref t.length;
+    while (at < count) {
+        if ((deref t.data)[at] == UNIT_ESCAPE && at + 1 < count && (deref t.data)[at + 1] == 91) {
+            var scan: i64 = at + 2;
+            while (scan < count && (deref t.data)[scan] >= 48 && (deref t.data)[scan] <= 57) {
+                scan += 1;
+            }
+            if (scan < count && (deref t.data)[scan] == 109) {
+                at = scan + 1;
+                continue;
+            }
+        }
+        total += 1;
+        at += 1;
+    }
+    return total;
 }

@@ -1,7 +1,7 @@
 // Primitive, string-escape and property-key formatting shared by inspection.
 import("std::math::float")::{float_to_bits_f64};
 import("./inspect_text")::{Inspector, Text, UNIT_CLOSE_BRACKET, UNIT_LOWER_N, UNIT_LOWER_S,
-    UNIT_OPEN_BRACKET, text_append, text_ascii, text_free, text_integer, text_js, text_new, text_spaces, text_unit, text_units};
+    UNIT_OPEN_BRACKET, STYLE_STRING, STYLE_SYMBOL, style_begin, style_end, text_append, text_ascii, text_free, text_integer, text_js, text_new, text_spaces, text_unit, text_units};
 import("./inspect_engine")::{ARRAY_INDEX_LIMIT, I_SYMBOL_STRING, JS_STRING, JS_SYMBOL, MIN_LINE_WIDTH,
     call0, failed, intrinsic};
 
@@ -277,7 +277,9 @@ pub fun format_key(ins: ptr<Inspector>, dest: ptr<Text>, key: ptr<u8>, enumerabl
         if (!enumerable) {
             text_unit(ins, dest, UNIT_OPEN_BRACKET);
         }
+        style_begin(ins, dest, STYLE_SYMBOL);
         format_symbol(ins, dest, key);
+        style_end(ins, dest, STYLE_SYMBOL);
         if (!enumerable) {
             text_unit(ins, dest, UNIT_CLOSE_BRACKET);
         }
@@ -300,7 +302,9 @@ pub fun format_key(ins: ptr<Inspector>, dest: ptr<Text>, key: ptr<u8>, enumerabl
     } else if (is_identifier(units, length)) {
         text_units(ins, dest, units, length);
     } else {
+        style_begin(ins, dest, STYLE_STRING);
         escape_units(ins, dest, units, length);
+        style_end(ins, dest, STYLE_STRING);
     }
     wr_string_release(js);
 }
