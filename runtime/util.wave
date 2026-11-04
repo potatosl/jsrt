@@ -40,6 +40,7 @@ import("./output")::{write_text, print_value};
 import("./assert_deep")::{DeepIntrinsics, deep_install, deep_release, deep_equal};
 import("./buffer_core")::{is_byte_view};
 import("./byte_codec")::{encode_bytes};
+import("./brands")::{is_data_view, is_arguments_object, is_generator_object, is_map_iterator, is_set_iterator, is_generator_function, is_async_function, is_module_namespace_object};
 import("./brands")::{is_map, is_set, is_weak_map, is_weak_set, is_regexp, is_promise, is_native_error, is_number_object,
     is_string_object, is_boolean_object, is_bigint_object, is_symbol_object};
 import("./config")::{ARGUMENT_LIMIT};
@@ -414,6 +415,33 @@ export(c) fun jsrt_util_type_check(ctx: ptr<u8>, fn: ptr<u8>, receiver: ptr<u8>,
     if (same_name(name, "isSymbolObject")) {
         return boolean(ctx, is_symbol_object(ctx, args[0]));
     }
+    if (same_name(name, "isDataView")) {
+        return boolean(ctx, is_data_view(ctx, args[0]));
+    }
+    if (same_name(name, "isArrayBufferView")) {
+        return boolean(ctx, (actual != TYPED_ARRAY_NONE && actual != TYPED_ARRAY_BUFFER) || is_data_view(ctx, args[0]));
+    }
+    if (same_name(name, "isArgumentsObject")) {
+        return boolean(ctx, is_arguments_object(ctx, args[0]));
+    }
+    if (same_name(name, "isGeneratorObject")) {
+        return boolean(ctx, is_generator_object(ctx, args[0]));
+    }
+    if (same_name(name, "isMapIterator")) {
+        return boolean(ctx, is_map_iterator(ctx, args[0]));
+    }
+    if (same_name(name, "isSetIterator")) {
+        return boolean(ctx, is_set_iterator(ctx, args[0]));
+    }
+    if (same_name(name, "isGeneratorFunction")) {
+        return boolean(ctx, is_generator_function(ctx, args[0]));
+    }
+    if (same_name(name, "isAsyncFunction")) {
+        return boolean(ctx, is_async_function(ctx, args[0]));
+    }
+    if (same_name(name, "isModuleNamespaceObject")) {
+        return boolean(ctx, is_module_namespace_object(ctx, args[0]));
+    }
     if (same_name(name, "isBoxedPrimitive")) {
         return boolean(ctx, is_number_object(ctx, args[0]) || is_string_object(ctx, args[0]) ||
             is_boolean_object(ctx, args[0]) || is_bigint_object(ctx, args[0]) || is_symbol_object(ctx, args[0]));
@@ -470,16 +498,19 @@ pub fun install_util(ctx: ptr<u8>, ex: ptr<ptr<u8>>) -> bool {
     set_inspect_function(ctx, (deref host_state.methods)[6]);
     var types: ptr<u8> = plain(ctx);
     protect(ctx, types);
-    define(ctx, types, "isUint8Array", (deref host_state.methods)[3], ex, false);
+    define(ctx, types, "isUint8Array", (deref host_state.methods)[3], ex, true);
     // The remaining brand-based checks share one native callback and are told apart by name.
-    var check_names: array<str, 28> = ["isProxy", "isTypedArray", "isArrayBuffer", "isAnyArrayBuffer", "isInt8Array",
+    var check_names: array<str, 42> = ["isDataView", "isArrayBufferView", "isArgumentsObject", "isGeneratorObject", "isMapIterator",
+        "isSetIterator", "isGeneratorFunction", "isAsyncFunction", "isModuleNamespaceObject", "isSharedArrayBuffer",
+        "isFloat16Array", "isExternal", "isKeyObject", "isCryptoKey",
+        "isProxy", "isTypedArray", "isArrayBuffer", "isAnyArrayBuffer", "isInt8Array",
         "isInt16Array", "isInt32Array", "isUint8ClampedArray", "isUint16Array", "isUint32Array",
         "isFloat32Array", "isFloat64Array", "isBigInt64Array", "isBigUint64Array", "isDate", "isRegExp", "isMap",
         "isSet", "isWeakMap", "isWeakSet", "isPromise", "isNativeError", "isNumberObject", "isStringObject",
         "isBooleanObject", "isBigIntObject", "isSymbolObject", "isBoxedPrimitive"];
-    for (var i: i64 = 0; i < 28; i++) {
+    for (var i: i64 = 0; i < 42; i++) {
         var check_name: ptr<u8> = utf8(check_names[i]);
-        define(ctx, types, check_names[i], function(ctx, check_name, type_callback()), ex, false);
+        define(ctx, types, check_names[i], function(ctx, check_name, type_callback()), ex, true);
         release(check_name);
     }
     define(ctx, (deref host_state.exports), "types", types, ex, false);

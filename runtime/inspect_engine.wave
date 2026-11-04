@@ -133,6 +133,8 @@ pub const DEFAULT_ARRAY_LIMIT: i64 = 100;
 pub const DEFAULT_STRING_LIMIT: i64 = 10000;
 
 pub const COMPACT_LEVELS: i64 = 3;
+// compact: true (legacy layout) is stored as -1 in Inspector.compact.
+pub const COMPACT_LEGACY: i64 = -1;
 
 pub const MIN_LINE_WIDTH: i64 = 16;
 

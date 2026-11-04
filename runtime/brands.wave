@@ -7,6 +7,7 @@
 // change the answer. A thrown TypeError means "not that kind"; the exception is discarded here.
 import("./context_state")::{owned_context_slot, release_context_slot, BRANDS_SLOT};
 import("./values")::{get, capture};
+import("./byte_codec")::{encode_bytes};
 import("./inspect_engine")::{capture_getter};
 import("std::mem::layout")::{size_of};
 extern(c, "wr_context_global") fun global(ctx: ptr<u8>) -> ptr<u8>;
@@ -34,10 +35,15 @@ const CHECK_STRING_OBJECT: i64 = 8;
 const CHECK_BOOLEAN_OBJECT: i64 = 9;
 const CHECK_BIGINT_OBJECT: i64 = 10;
 const CHECK_SYMBOL_OBJECT: i64 = 11;
-const CHECK_COUNT: i64 = 12;
+const CHECK_DATA_VIEW: i64 = 12;
+// Object.prototype.toString and Object.hasOwn, used for the tag-based checks below.
+const CHECK_TO_STRING: i64 = 13;
+const CHECK_HAS_OWN: i64 = 14;
+const CHECK_COUNT: i64 = 15;
 
 struct BrandState {
-    checks: array<ptr<u8>, 12>;
+    checks: array<ptr<u8>, 15>;
+    tag_symbol: ptr<u8>;
     // Function.prototype: a callable that returns undefined, passed as the rejection handler of the
     // Promise brand probe so the derived promise never reports a rejection of its own.
     swallow: ptr<u8>;
@@ -151,6 +157,12 @@ pub fun install_brands(ctx: ptr<u8>, ex: ptr<ptr<u8>>) -> bool {
     (deref state.checks)[CHECK_WEAK_MAP] = capture(ctx, get(ctx, get(ctx, root, "WeakMap", ex), "prototype", ex), "has", ex);
     (deref state.checks)[CHECK_WEAK_SET] = capture(ctx, get(ctx, get(ctx, root, "WeakSet", ex), "prototype", ex), "has", ex);
     (deref state.checks)[CHECK_PROMISE] = capture(ctx, get(ctx, get(ctx, root, "Promise", ex), "prototype", ex), "then", ex);
+    (deref state.checks)[CHECK_DATA_VIEW] = capture_getter(ctx, "DataView", "byteLength", ex);
+    var object_ctor: ptr<u8> = get(ctx, root, "Object", ex);
+    (deref state.checks)[CHECK_TO_STRING] = capture(ctx, get(ctx, object_ctor, "prototype", ex), "toString", ex);
+    (deref state.checks)[CHECK_HAS_OWN] = capture(ctx, object_ctor, "hasOwn", ex);
+    deref state.tag_symbol = get(ctx, get(ctx, root, "Symbol", ex), "toStringTag", ex);
+    protect(ctx, deref state.tag_symbol);
     deref state.swallow = get(ctx, get(ctx, root, "Function", ex), "prototype", ex);
     protect(ctx, deref state.swallow);
     (deref state.checks)[CHECK_ERROR] = capture(ctx, get(ctx, root, "Error", ex), "isError", ex);
@@ -172,6 +184,10 @@ pub fun shutdown_brands(ctx: ptr<u8>) {
     if (state == null) {
         return;
     }
+    if (deref state.tag_symbol != null) {
+        unprotect(ctx, deref state.tag_symbol);
+        deref state.tag_symbol = null;
+    }
     if (deref state.swallow != null) {
         unprotect(ctx, deref state.swallow);
         deref state.swallow = null;
@@ -183,4 +199,81 @@ pub fun shutdown_brands(ctx: ptr<u8>) {
         }
     }
     release_context_slot(ctx, BRANDS_SLOT, size_of<BrandState>() as i64);
+}
+
+pub fun is_data_view(ctx: ptr<u8>, value: ptr<u8>) -> bool {
+    return passes(ctx, CHECK_DATA_VIEW, value, false);
+}
+
+// Compares Object.prototype.toString(value) with "[object <tag>]". Objects that carry their own
+// Symbol.toStringTag are rejected (unless `own_tag_allowed`), so a plain object cannot claim the
+// tag; real arguments objects, iterators and generators inherit or have no tag property.
+fun has_builtin_tag(ctx: ptr<u8>, value: ptr<u8>, tag: str, own_tag_allowed: bool) -> bool {
+    if (kind(ctx, value) != TYPE_OBJECT) {
+        return false;
+    }
+    var state: ptr<BrandState> = storage(ctx);
+    var describe: ptr<u8> = (deref state.checks)[CHECK_TO_STRING];
+    var has_own: ptr<u8> = (deref state.checks)[CHECK_HAS_OWN];
+    if (describe == null || has_own == null || deref state.tag_symbol == null) {
+        return false;
+    }
+    var problem: ptr<u8> = null;
+    if (!own_tag_allowed) {
+        var pair: array<ptr<u8>, 2> = [value, deref state.tag_symbol];
+        var owned: ptr<u8> = call(ctx, has_own, null, 2, &pair[0], &problem);
+        if (problem != null || owned == null || truth(ctx, owned)) {
+            return false;
+        }
+    }
+    var label: ptr<u8> = call(ctx, describe, value, 0, null, &problem);
+    if (problem != null || label == null) {
+        return false;
+    }
+    var bytes: array<u8, 64>;
+    var count: i64 = encode_bytes(ctx, label, 0, &bytes[0], 63, &problem);
+    if (count < 0 || problem != null) {
+        return false;
+    }
+    var wanted: ptr<u8> = tag as ptr<u8>;
+    var i: i64 = 0;
+    while (wanted[i] != 0) {
+        if (i >= count || bytes[i + 8] != wanted[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    // "[object " is eight bytes and the tag is followed by "]".
+    return count == i + 9 && bytes[count - 1] == 93;
+}
+
+pub fun is_arguments_object(ctx: ptr<u8>, value: ptr<u8>) -> bool {
+    return has_builtin_tag(ctx, value, "Arguments", false);
+}
+
+pub fun is_generator_object(ctx: ptr<u8>, value: ptr<u8>) -> bool {
+    return has_builtin_tag(ctx, value, "Generator", false) || has_builtin_tag(ctx, value, "AsyncGenerator", false);
+}
+
+pub fun is_map_iterator(ctx: ptr<u8>, value: ptr<u8>) -> bool {
+    return has_builtin_tag(ctx, value, "Map Iterator", false);
+}
+
+pub fun is_set_iterator(ctx: ptr<u8>, value: ptr<u8>) -> bool {
+    return has_builtin_tag(ctx, value, "Set Iterator", false);
+}
+
+pub fun is_generator_function(ctx: ptr<u8>, value: ptr<u8>) -> bool {
+    return has_builtin_tag(ctx, value, "GeneratorFunction", false) ||
+        has_builtin_tag(ctx, value, "AsyncGeneratorFunction", false);
+}
+
+pub fun is_async_function(ctx: ptr<u8>, value: ptr<u8>) -> bool {
+    return has_builtin_tag(ctx, value, "AsyncFunction", false) ||
+        has_builtin_tag(ctx, value, "AsyncGeneratorFunction", false);
+}
+
+// Module namespace objects carry their own Symbol.toStringTag ("Module").
+pub fun is_module_namespace_object(ctx: ptr<u8>, value: ptr<u8>) -> bool {
+    return has_builtin_tag(ctx, value, "Module", true);
 }

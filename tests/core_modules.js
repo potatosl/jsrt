@@ -982,6 +982,69 @@ process.on('exit', code => {
         process.exitCode = 1;
     }
 });
+function inspectOptionCases() {
+    const { inspect } = require('util');
+    const sample = { name: 'x'.repeat(30), list: [1, 2, 3], nested: { a: { b: { c: { d: 1 } } } }, fn() {},
+        z: 'z'.repeat(20), y: 'y'.repeat(20) };
+    for (const compact of [true, false, 0, 1, 2, 3, 5]) {
+        const text = inspect(sample, { compact });
+        equal(typeof text, 'string', 'compact ' + compact);
+    }
+    equal(inspect(sample, { compact: false }).split('\n').length, 16, 'compact:false puts every entry on its own line');
+    equal(inspect({ a: [1, 2, 3] }, { compact: 1 }), '{\n  a: [ 1, 2, 3 ]\n}', 'compact:1 combines one inner level');
+    equal(inspect({ a: 1, b: 'two' }, { compact: true }), "{ a: 1, b: 'two' }", 'compact:true keeps short objects on a line');
+    equal(inspect({ b: 1, a: 2, c: [3, 2] }, { sorted: true }), '{ a: 2, b: 1, c: [ 3, 2 ] }', 'sorted orders keys');
+    equal(inspect(new Map([['b', 1], ['a', 2]]), { sorted: true }), "Map(2) { 'a' => 2, 'b' => 1 }", 'sorted orders Map entries');
+    equal(inspect(new Set([3, 1, 2]), { sorted: true }), 'Set(3) { 1, 2, 3 }', 'sorted orders Set entries');
+    equal(inspect({ b: 1, a: 2 }, { sorted: (left, right) => right.localeCompare(left) }), '{ b: 1, a: 2 }',
+        'sorted accepts a comparator');
+    equal(inspect([3, 1, 2], { sorted: true }), '[ 3, 1, 2 ]', 'sorted keeps array elements in order');
+    equal(inspect(Object.assign([3, 1, 2], { b: 1, a: 2 }), { sorted: true }), '[ 3, 1, 2, a: 2, b: 1 ]',
+        'sorted orders only the extra array keys');
+    equal(inspect(1234567.891, { numericSeparator: true }), '1_234_567.891', 'numericSeparator groups digits');
+    equal(inspect(-1234, { numericSeparator: true }), '-1_234', 'negative numbers');
+    equal(inspect(123456789n, { numericSeparator: true }), '123_456_789n', 'bigint');
+    equal(inspect(0.0001234567, { numericSeparator: true }), '0.000_123_456_7', 'fraction digits group from the left');
+    equal(inspect(1e21, { numericSeparator: true }), '1e+21', 'exponent form is untouched');
+    equal(inspect(-0, { numericSeparator: true }), '-0', 'negative zero');
+    equal(inspect([1000, 2000.5], { numericSeparator: true }), '[ 1_000, 2_000.5 ]', 'array elements');
+    const accessors = { get a() { return 5; }, set b(value) {}, get c() { return { x: 1 }; }, get d() { return null; },
+        get f() { return 'str'; }, get h() { return 1; }, set h(value) {} };
+    equal(inspect(accessors), '{\n  a: [Getter],\n  b: [Setter],\n  c: [Getter],\n  d: [Getter],\n  f: [Getter],\n  h: [Getter/Setter]\n}',
+        'accessors are not invoked by default');
+    const shown = inspect(accessors, { getters: true });
+    equal(shown.includes('a: [Getter: 5]') && shown.includes('c: [Getter] { x: 1 }') && shown.includes('d: [Getter: null]') &&
+        shown.includes("f: [Getter: 'str']") && shown.includes('h: [Getter/Setter: 1]') && shown.includes('b: [Setter]'), true,
+        'getters:true shows values');
+    const onlyGet = inspect(accessors, { getters: 'get' });
+    equal(onlyGet.includes('a: [Getter: 5]') && onlyGet.includes('h: [Getter/Setter]'), true, "getters:'get'");
+    const onlySet = inspect(accessors, { getters: 'set' });
+    equal(onlySet.includes('a: [Getter]') && onlySet.includes('h: [Getter/Setter: 1]'), true, "getters:'set'");
+    equal(inspect({ get e() { throw new Error('boom'); } }, { getters: true }).includes('<Inspection threw ('), true,
+        'a throwing getter is reported');
+}
+function utilTypesMoreCases() {
+    const types = require('util').types;
+    function collect() { return arguments; }
+    function* generator() {}
+    async function asyncFunction() {}
+    async function* asyncGenerator() {}
+    equal(types.isDataView(new DataView(new ArrayBuffer(2))), true, 'isDataView');
+    equal(types.isDataView(new Uint8Array(2)), false, 'isDataView rejects typed arrays');
+    equal(types.isArrayBufferView(new DataView(new ArrayBuffer(2))) && types.isArrayBufferView(new Uint8Array(2)), true,
+        'isArrayBufferView accepts views');
+    equal(types.isArrayBufferView(new ArrayBuffer(2)), false, 'isArrayBufferView rejects the buffer itself');
+    equal(types.isArgumentsObject(collect(1)), true, 'isArgumentsObject');
+    equal(types.isArgumentsObject({ [Symbol.toStringTag]: 'Arguments' }), false, 'forged Arguments tag');
+    equal(types.isGeneratorObject(generator()) && types.isGeneratorObject(asyncGenerator()), true, 'isGeneratorObject');
+    equal(types.isGeneratorObject({ [Symbol.toStringTag]: 'Generator' }), false, 'forged Generator tag');
+    equal(types.isMapIterator(new Map().entries()) && types.isSetIterator(new Set().values()), true, 'collection iterators');
+    equal(types.isMapIterator(new Set().values()), false, 'wrong iterator kind');
+    equal(types.isGeneratorFunction(generator) && types.isGeneratorFunction(asyncGenerator), true, 'isGeneratorFunction');
+    equal(types.isAsyncFunction(asyncFunction) && types.isAsyncFunction(asyncGenerator), true, 'isAsyncFunction');
+    equal(types.isAsyncFunction(function () {}) || types.isGeneratorFunction(asyncFunction), false, 'ordinary functions');
+    equal(Object.keys(types).includes('isDate'), true, 'type checks are enumerable');
+}
 function stringDecoderCases() {
     const { StringDecoder } = require('string_decoder');
     const euro = Buffer.from('€');
@@ -1239,6 +1302,8 @@ async function assertExtraCases() {
 async function main() {
     await eventsOnCases();
     stringDecoderCases();
+    utilTypesMoreCases();
+    inspectOptionCases();
     parseArgsCases();
     urlFileCases();
     utilTextCases();

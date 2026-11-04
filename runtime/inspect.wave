@@ -8,9 +8,9 @@ import("./inspect_text")::{Entries, Inspector, Seen, Text, UNIT_CLOSE_BRACE, UNI
     UNIT_CLOSE_PAREN, UNIT_GREATER_THAN, UNIT_LOWER_S, UNIT_OPEN_BRACE, UNIT_OPEN_BRACKET, UNIT_OPEN_PAREN,
     UNIT_SPACE, entries_free, entries_push, push_ascii, push_empty_items, push_remaining, text_append,
     text_ascii, text_contains, text_equals, text_equals_ascii, text_free, text_indented, text_integer,
-    text_js, text_new, text_unit, text_units};
+    text_js, text_new, text_to_value, text_unit, text_units};
 import("./inspect_engine")::{BUFFER_INSPECT_BYTES, DEFAULT_ARRAY_LIMIT, DEFAULT_BREAK_LENGTH,
-    DEFAULT_DEPTH, DEFAULT_STRING_LIMIT, I_BIGINT_VALUE, I_BOOLEAN_VALUE, I_BUFFER_PROTOTYPE,
+    DEFAULT_DEPTH, COMPACT_LEGACY, COMPACT_LEVELS, DEFAULT_STRING_LIMIT, I_BIGINT_VALUE, I_BOOLEAN_VALUE, I_BUFFER_PROTOTYPE,
     I_CUSTOM_SYMBOL, I_DATE_ISO, I_DATE_TIME, I_DESCRIPTOR, I_ERROR_PROTOTYPE, I_FUNCTION_PROTOTYPE,
     I_FUNCTION_TO_STRING, I_INSPECT, I_MAP_ENTRIES, I_MAP_NEXT, I_MAP_SIZE, I_NUMBER_VALUE,
     I_OBJECT_TO_STRING, I_OWN_KEYS, I_REFLECT_GET, I_REGEXP_SOURCE, I_REGEXP_STRING, I_SET_NEXT,
@@ -19,7 +19,7 @@ import("./inspect_engine")::{BUFFER_INSPECT_BYTES, DEFAULT_ARRAY_LIMIT, DEFAULT_
     PROPERTY_ARRAY, PROPERTY_ARRAY_EXTRA, PROPERTY_OBJECT, SHAPE_ARRAY, SHAPE_ARRAY_BUFFER, SHAPE_KEYS,
     SHAPE_MAP, SHAPE_SET, SHAPE_TYPED, SHAPE_UNKNOWN, TYPED_ARRAY_BUFFER, TYPED_BIGINT64, TYPED_BIGUINT64,
     TYPED_FLOAT64, TYPED_NONE, TYPED_UINT8, UNLIMITED_DEPTH, ascii_value, call0, chain_contains,
-    descriptor, failed, intrinsic, is_proxy, is_undefined, probe, prototype_of, reflect_get, state};
+    call2, descriptor, failed, intrinsic, is_proxy, is_undefined, probe, prototype_of, reflect_get, state};
 import("./inspect_primitive")::{format_bigint, format_key, format_number, format_string, format_symbol,
     index_key, lower_hex_unit};
 import("./inspect_layout")::{reduce_output};
@@ -253,7 +253,10 @@ fun format_property(ins: ptr<Inspector>, holder: ptr<u8>, key: ptr<u8>, recurse:
             format_value(ins, data, recurse, value_text);
             deref ins.indentation = deref ins.indentation - 2;
         } else if (!is_undefined(ins, getter)) {
-            if (!is_undefined(ins, setter)) {
+            var has_setter: bool = !is_undefined(ins, setter);
+            if (getter_is_shown(ins, has_setter)) {
+                format_getter_value(ins, holder, getter, has_setter, recurse, value_text);
+            } else if (has_setter) {
                 text_ascii(ins, value_text, "[Getter/Setter]");
             } else {
                 text_ascii(ins, value_text, "[Getter]");
@@ -1069,6 +1072,13 @@ fun format_children(ins: ptr<Inspector>, value: ptr<u8>, own: ptr<u8>, recurse: 
         }
     }
     text_append(ins, composed_base, base);
+    if (deref ins.sorted > 0 && !failed(ins)) {
+        var first: i64 = 0;
+        if (array_extras) {
+            first = deref output.count - deref keys.count;
+        }
+        sort_entries(ins, &output, first);
+    }
     if (!failed(ins)) {
         reduce_output(ins, &output, composed_base, open, close, array_extras, level, has_more, numeric, dest);
     }
@@ -1090,6 +1100,11 @@ pub fun inspector_init(ins: ptr<Inspector>, ctx: ptr<u8>, ex: ptr<ptr<u8>>) -> b
     deref ins.circular = 0;
     deref ins.seen_count = 0;
     deref ins.overflow = false;
+    deref ins.compact = COMPACT_LEVELS;
+    deref ins.sorted = 0;
+    deref ins.sorted_fn = null;
+    deref ins.numeric_separator = false;
+    deref ins.getters = 0;
     deref ins.options = null;
     deref ins.seen = mem_alloc_zeroed(INSPECT_NESTING_LIMIT * (size_of<Seen>() as i64)) as ptr<Seen>;
     if (deref ins.seen == null) {
@@ -1161,6 +1176,7 @@ pub fun inspector_options(ins: ptr<Inspector>, options: ptr<u8>) {
     if (deref ins.max_string < 0) {
         deref ins.max_string = 0;
     }
+    read_layout_options(ins, options);
     if (deref ins.options == null) {
         wr_protect(ctx, options);
         deref ins.options = options;
@@ -1263,4 +1279,154 @@ pub fun builtin_to_string(ins: ptr<Inspector>, value: ptr<u8>) -> bool {
     wr_string_release(js);
     global_ctor = wr_call(ctx, intrinsic(ctx, I_REFLECT_GET), null, 2, &global_args[0], &ignored);
     return ignored == null && global_ctor != null && wr_equal(ctx, global_ctor, ctor);
+}
+
+// compact, sorted, numericSeparator and getters. A comparator function is kept alive through
+// ins.options, which stays protected for the whole inspection.
+fun read_layout_options(ins: ptr<Inspector>, options: ptr<u8>) {
+    var ctx: ptr<u8> = deref ins.ctx;
+    var compact: ptr<u8> = get(ctx, options, "compact", deref ins.ex);
+    if (!failed(ins) && wr_type(ctx, compact) == JS_BOOLEAN) {
+        if (wr_to_boolean(ctx, compact)) {
+            deref ins.compact = COMPACT_LEGACY;
+        } else {
+            deref ins.compact = 0;
+        }
+    } else if (!failed(ins) && wr_type(ctx, compact) == JS_NUMBER) {
+        var levels: f64 = wr_to_number(ctx, compact, deref ins.ex);
+        if (levels >= 1.0) {
+            deref ins.compact = levels as i64;
+        } else {
+            deref ins.compact = 0;
+        }
+    }
+    var sorted: ptr<u8> = get(ctx, options, "sorted", deref ins.ex);
+    if (!failed(ins) && wr_type(ctx, sorted) == JS_OBJECT && wr_callable(ctx, sorted)) {
+        deref ins.sorted = 2;
+        deref ins.sorted_fn = sorted;
+    } else if (!failed(ins) && wr_type(ctx, sorted) != JS_UNDEFINED && wr_to_boolean(ctx, sorted)) {
+        deref ins.sorted = 1;
+    }
+    var separator: ptr<u8> = get(ctx, options, "numericSeparator", deref ins.ex);
+    if (!failed(ins) && wr_type(ctx, separator) != JS_UNDEFINED) {
+        deref ins.numeric_separator = wr_to_boolean(ctx, separator);
+    }
+    var getters: ptr<u8> = get(ctx, options, "getters", deref ins.ex);
+    if (!failed(ins) && wr_type(ctx, getters) == JS_STRING) {
+        var label: ptr<u8> = wr_to_string(ctx, getters, deref ins.ex);
+        if (label != null) {
+            var units: ptr<u16> = wr_string_characters(label);
+            var width: i64 = wr_string_length(label);
+            if (width == 3 && units[0] == 103) {
+                deref ins.getters = 2;
+            } else if (width == 3 && units[0] == 115) {
+                deref ins.getters = 3;
+            }
+            wr_string_release(label);
+        }
+    } else if (!failed(ins) && wr_type(ctx, getters) != JS_UNDEFINED && wr_to_boolean(ctx, getters)) {
+        deref ins.getters = 1;
+    }
+}
+
+// Default order is the UTF-16 code unit order of Array.prototype.sort() on the formatted strings.
+fun text_precedes(a: ptr<Text>, b: ptr<Text>) -> bool {
+    var shorter: i64 = deref a.length;
+    if (deref b.length < shorter) {
+        shorter = deref b.length;
+    }
+    for (var i: i64 = 0; i < shorter; i++) {
+        var left: u16 = (deref a.data)[i];
+        var right: u16 = (deref b.data)[i];
+        if (left != right) {
+            return left < right;
+        }
+    }
+    return deref a.length < deref b.length;
+}
+
+// True when `later` must move in front of `earlier`: the comparator result is positive.
+fun entry_swaps(ins: ptr<Inspector>, earlier: ptr<Text>, later: ptr<Text>) -> bool {
+    if (deref ins.sorted == 1) {
+        return text_precedes(later, earlier);
+    }
+    var ctx: ptr<u8> = deref ins.ctx;
+    var verdict: ptr<u8> = call2(ins, deref ins.sorted_fn, text_to_value(ctx, earlier), text_to_value(ctx, later));
+    if (failed(ins)) {
+        return false;
+    }
+    return wr_to_number(ctx, verdict, deref ins.ex) > 0.0;
+}
+
+// Stable insertion sort of output[first..]; inspection output is bounded, so quadratic cost is fine.
+fun sort_entries(ins: ptr<Inspector>, output: ptr<Entries>, first: i64) {
+    if (first < 0) {
+        return;
+    }
+    for (var i: i64 = first + 1; i < deref output.count && !failed(ins); i++) {
+        var j: i64 = i;
+        while (j > first && !failed(ins) && entry_swaps(ins, (deref output.items)[j - 1], (deref output.items)[j])) {
+            var held: ptr<Text> = (deref output.items)[j - 1];
+            (deref output.items)[j - 1] = (deref output.items)[j];
+            (deref output.items)[j] = held;
+            j -= 1;
+        }
+    }
+}
+
+// getters: true shows every accessor, 'get' only getters without a setter, 'set' only getters
+// with a setter (Node's meaning of those two strings).
+fun getter_is_shown(ins: ptr<Inspector>, has_setter: bool) -> bool {
+    var mode: i64 = deref ins.getters;
+    if (mode == 1) {
+        return true;
+    }
+    if (mode == 2) {
+        return !has_setter;
+    }
+    return mode == 3 && has_setter;
+}
+
+// "[Getter: 5]", "[Getter] { x: 1 }", "[Getter: null]" or "[Getter: <Inspection threw (message)>]".
+fun format_getter_value(ins: ptr<Inspector>, holder: ptr<u8>, getter: ptr<u8>, has_setter: bool, recurse: i64,
+    dest: ptr<Text>) {
+    var ctx: ptr<u8> = deref ins.ctx;
+    var label: str = "Getter";
+    if (has_setter) {
+        label = "Getter/Setter";
+    }
+    var thrown: ptr<u8> = null;
+    var produced: ptr<u8> = wr_call(ctx, getter, holder, 0, null, &thrown);
+    if (thrown != null || produced == null) {
+        text_unit(ins, dest, UNIT_OPEN_BRACKET);
+        text_ascii(ins, dest, label);
+        text_ascii(ins, dest, ": <Inspection threw (");
+        var ignored: ptr<u8> = null;
+        if (thrown != null && wr_type(ctx, thrown) == JS_OBJECT) {
+            var message: ptr<u8> = get(ctx, thrown, "message", &ignored);
+            if (ignored == null) {
+                text_js(ins, dest, message);
+            }
+        }
+        text_ascii(ins, dest, ")>]");
+        return;
+    }
+    wr_protect(ctx, produced);
+    var kind: i32 = wr_type(ctx, produced);
+    text_unit(ins, dest, UNIT_OPEN_BRACKET);
+    text_ascii(ins, dest, label);
+    if (kind == JS_OBJECT) {
+        text_unit(ins, dest, UNIT_CLOSE_BRACKET);
+        text_unit(ins, dest, UNIT_SPACE);
+        deref ins.indentation = deref ins.indentation + 2;
+        format_value(ins, produced, recurse, dest);
+        deref ins.indentation = deref ins.indentation - 2;
+    } else {
+        text_ascii(ins, dest, ": ");
+        deref ins.indentation = deref ins.indentation + 2;
+        format_value(ins, produced, recurse, dest);
+        deref ins.indentation = deref ins.indentation - 2;
+        text_unit(ins, dest, UNIT_CLOSE_BRACKET);
+    }
+    wr_unprotect(ctx, produced);
 }

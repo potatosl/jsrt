@@ -1,7 +1,7 @@
 // Primitive, string-escape and property-key formatting shared by inspection.
 import("std::math::float")::{float_to_bits_f64};
 import("./inspect_text")::{Inspector, Text, UNIT_CLOSE_BRACKET, UNIT_LOWER_N, UNIT_LOWER_S,
-    UNIT_OPEN_BRACKET, text_ascii, text_integer, text_js, text_spaces, text_unit, text_units};
+    UNIT_OPEN_BRACKET, text_append, text_ascii, text_free, text_integer, text_js, text_new, text_spaces, text_unit, text_units};
 import("./inspect_engine")::{ARRAY_INDEX_LIMIT, I_SYMBOL_STRING, JS_STRING, JS_SYMBOL, MIN_LINE_WIDTH,
     call0, failed, intrinsic};
 
@@ -14,17 +14,106 @@ extern(c, "wr_string_release") fun wr_string_release(text: ptr<u8>);
 
 // Primitive formatting
 
+const UNIT_UNDERSCORE: u16 = 95;
+const UNIT_LOWER_E: u16 = 101;
+const UNIT_UPPER_I: u16 = 73;
+const UNIT_POINT: u16 = 46;
+const UNIT_MINUS: u16 = 45;
+
+// Node's addNumericSeparator: groups the integer digits of `digits` (which may start with '-') by
+// three from the right, writing the result into dest.
+fun write_grouped_integer(ins: ptr<Inspector>, dest: ptr<Text>, digits: ptr<u16>, length: i64) {
+    var start: i64 = 0;
+    if (length > 0 && digits[0] == UNIT_MINUS) {
+        start = 1;
+        text_unit(ins, dest, UNIT_MINUS);
+    }
+    var count: i64 = length - start;
+    for (var i: i64 = 0; i < count; i++) {
+        if (i > 0 && (count - i) % 3 == 0) {
+            text_unit(ins, dest, UNIT_UNDERSCORE);
+        }
+        text_unit(ins, dest, digits[start + i]);
+    }
+}
+
+// Fraction digits are grouped by three from the left.
+fun write_grouped_fraction(ins: ptr<Inspector>, dest: ptr<Text>, digits: ptr<u16>, length: i64) {
+    for (var i: i64 = 0; i < length; i++) {
+        if (i > 0 && i % 3 == 0) {
+            text_unit(ins, dest, UNIT_UNDERSCORE);
+        }
+        text_unit(ins, dest, digits[i]);
+    }
+}
+
+fun has_unit(digits: ptr<u16>, length: i64, unit: u16) -> bool {
+    for (var i: i64 = 0; i < length; i++) {
+        if (digits[i] == unit) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// numericSeparator for finite numbers whose decimal text has no exponent; anything else keeps
+// the plain text, as in Node.
+fun format_separated_number(ins: ptr<Inspector>, dest: ptr<Text>, value: ptr<u8>, number: f64) {
+    var plain: ptr<Text> = text_new(ins);
+    text_js(ins, plain, value);
+    if (plain == null || deref plain.data == null) {
+        text_free(plain);
+        return;
+    }
+    var digits: ptr<u16> = deref plain.data;
+    var length: i64 = deref plain.length;
+    var special: bool = number != number || has_unit(digits, length, UNIT_LOWER_E) || has_unit(digits, length, UNIT_UPPER_I) ||
+        number - number != 0.0;
+    if (special) {
+        text_append(ins, dest, plain);
+        text_free(plain);
+        return;
+    }
+    var point: i64 = -1;
+    for (var i: i64 = 0; i < length && point < 0; i++) {
+        if (digits[i] == UNIT_POINT) {
+            point = i;
+        }
+    }
+    if (point < 0) {
+        write_grouped_integer(ins, dest, digits, length);
+    } else {
+        write_grouped_integer(ins, dest, digits, point);
+        text_unit(ins, dest, UNIT_POINT);
+        write_grouped_fraction(ins, dest, digits + point + 1, length - point - 1);
+    }
+    text_free(plain);
+}
+
 pub fun format_number(ins: ptr<Inspector>, dest: ptr<Text>, value: ptr<u8>) {
     var number: f64 = wr_to_number(deref ins.ctx, value, deref ins.ex);
     if (number == 0.0 && (float_to_bits_f64(number) >> 63) == 1) {
         text_ascii(ins, dest, "-0");
         return;
     }
+    if (deref ins.numeric_separator) {
+        format_separated_number(ins, dest, value, number);
+        return;
+    }
     text_js(ins, dest, value);
 }
 
 pub fun format_bigint(ins: ptr<Inspector>, dest: ptr<Text>, value: ptr<u8>) {
-    text_js(ins, dest, value);
+    if (deref ins.numeric_separator) {
+        var plain: ptr<Text> = text_new(ins);
+        text_js(ins, plain, value);
+        if (plain != null && deref plain.data != null) {
+            write_grouped_integer(ins, dest, deref plain.data, deref plain.length);
+        }
+        text_free(plain);
+    } else {
+        text_js(ins, dest, value);
+    }
     text_unit(ins, dest, UNIT_LOWER_N);
 }
 

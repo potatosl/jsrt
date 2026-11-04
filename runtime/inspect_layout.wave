@@ -1,7 +1,7 @@
 // Line layout: grouping of numeric rows and single-line versus multi-line output.
 import("./inspect_text")::{Entries, Inspector, Text, UNIT_COMMA, UNIT_NEWLINE, UNIT_SPACE, entries_free,
     entries_push, text_append, text_ascii, text_contains, text_new, text_spaces, text_unit};
-import("./inspect_engine")::{COMPACT_LEVELS, GROUP_COLUMN_LIMIT, GROUP_MINIMUM_ENTRIES};
+import("./inspect_engine")::{COMPACT_LEGACY, GROUP_COLUMN_LIMIT, GROUP_MINIMUM_ENTRIES};
 
 
 // Line layout (Node reduceToSingleString / groupArrayElements)
@@ -56,8 +56,8 @@ pub fun group_elements(ins: ptr<Inspector>, output: ptr<Entries>, has_more: bool
     if (fit < columns) {
         columns = fit;
     }
-    if (COMPACT_LEVELS * 4 < columns) {
-        columns = COMPACT_LEVELS * 4;
+    if (deref ins.compact * 4 < columns) {
+        columns = deref ins.compact * 4;
     }
     if (GROUP_COLUMN_LIMIT < columns) {
         columns = GROUP_COLUMN_LIMIT;
@@ -140,10 +140,15 @@ pub fun below_break_length(ins: ptr<Inspector>, output: ptr<Entries>, start: i64
 pub fun reduce_output(ins: ptr<Inspector>, output: ptr<Entries>, base: ptr<Text>, open: ptr<Text>, close: str,
     array_extras: bool, recurse: i64, has_more: bool, numeric: bool, dest: ptr<Text>) {
     var entries: i64 = deref output.count;
-    if (array_extras && entries > GROUP_MINIMUM_ENTRIES) {
+    if (deref ins.compact == COMPACT_LEGACY) {
+        reduce_legacy(ins, output, base, open, close, dest);
+        return;
+    }
+    // compact: false skips both grouping and the single-line attempt.
+    if (deref ins.compact >= 1 && array_extras && entries > GROUP_MINIMUM_ENTRIES) {
         group_elements(ins, output, has_more, numeric);
     }
-    if (deref ins.current_depth - recurse < COMPACT_LEVELS && entries == deref output.count) {
+    if (deref ins.compact >= 1 && deref ins.current_depth - recurse < deref ins.compact && entries == deref output.count) {
         var start: i64 = deref output.count + deref ins.indentation + deref open.length + deref base.length + 10;
         if (below_break_length(ins, output, start, base)) {
             var multiline: bool = false;
@@ -186,5 +191,49 @@ pub fun reduce_output(ins: ptr<Inspector>, output: ptr<Entries>, base: ptr<Text>
     }
     text_unit(ins, dest, UNIT_NEWLINE);
     text_spaces(ins, dest, deref ins.indentation);
+    text_ascii(ins, dest, close);
+}
+
+// compact: true. Entries stay on one line while they fit, otherwise every entry gets its own line
+// and the closing brace follows the last entry on the same line.
+fun reduce_legacy(ins: ptr<Inspector>, output: ptr<Entries>, base: ptr<Text>, open: ptr<Text>, close: str,
+    dest: ptr<Text>) {
+    if (below_break_length(ins, output, 0, base)) {
+        text_append(ins, dest, open);
+        if (deref base.length > 0) {
+            text_unit(ins, dest, UNIT_SPACE);
+            text_append(ins, dest, base);
+        }
+        text_unit(ins, dest, UNIT_SPACE);
+        for (var i: i64 = 0; i < deref output.count; i++) {
+            if (i > 0) {
+                text_ascii(ins, dest, ", ");
+            }
+            text_append(ins, dest, (deref output.items)[i]);
+        }
+        text_unit(ins, dest, UNIT_SPACE);
+        text_ascii(ins, dest, close);
+        return;
+    }
+    text_append(ins, dest, open);
+    if (deref base.length == 0 && deref open.length == 1) {
+        text_unit(ins, dest, UNIT_SPACE);
+    } else {
+        if (deref base.length > 0) {
+            text_unit(ins, dest, UNIT_SPACE);
+            text_append(ins, dest, base);
+        }
+        text_unit(ins, dest, UNIT_NEWLINE);
+        text_spaces(ins, dest, deref ins.indentation + 2);
+    }
+    for (var i: i64 = 0; i < deref output.count; i++) {
+        if (i > 0) {
+            text_unit(ins, dest, UNIT_COMMA);
+            text_unit(ins, dest, UNIT_NEWLINE);
+            text_spaces(ins, dest, deref ins.indentation + 2);
+        }
+        text_append(ins, dest, (deref output.items)[i]);
+    }
+    text_unit(ins, dest, UNIT_SPACE);
     text_ascii(ins, dest, close);
 }

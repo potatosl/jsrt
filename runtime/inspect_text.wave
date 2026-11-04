@@ -60,6 +60,14 @@ pub struct Inspector {
     seen_count: i64;
     overflow: bool;
     options: ptr<u8>;
+    // compact: 0 is false, COMPACT_LEGACY is true, otherwise the number of inner levels combined on one line.
+    compact: i64;
+    // sorted: 0 off, 1 default string order, 2 user comparator in sorted_fn.
+    sorted: i64;
+    sorted_fn: ptr<u8>;
+    numeric_separator: bool;
+    // getters: 0 off, 1 all accessors, 2 getters without setters, 3 getters with setters.
+    getters: i64;
 }
 
 // UTF-16 text buffers
